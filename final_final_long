@@ -1,0 +1,744 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+# Load your data
+import csv
+main_data = 'THECSV!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!.csv'
+
+df = pd.read_csv(main_data)
+print("="*70)
+print("NYC CRIME COUNT PREDICTION - HOURLY BY BOROUGH")
+print("="*70)
+
+# Step 1: Extract hour from time column (ignoring minutes/seconds)
+print("\n1. Extracting hour from time column...")
+
+time_col = 'cmplnt_fr_tm'
+
+# Parse time and extract just the hour
+df['hour'] = pd.to_datetime(df[time_col], format='%H:%M:%S', errors='coerce').dt.hour
+
+# Check for missing values
+missing_hours = df['hour'].isna().sum()
+print(f"   Total records: {len(df):,}")
+print(f"   Missing hour values: {missing_hours:,}")
+
+if missing_hours > 0:
+    print(f"   → Dropping {missing_hours:,} rows with missing hour")
+    df = df.dropna(subset=['hour'])
+
+print(f"   Records after cleaning: {len(df):,}")
+
+# Step 2: Use your existing cleaning function
+print("\n2. Applying your data cleaning...")
+
+def create_cleaned_single_set(df):
+    valid_boro = {'STATEN ISLAND', 'BROOKLYN', 'QUEENS', 'MANHATTAN', 'BRONX'}
+    valid_code = {'FELONY', 'MISDEMEANOR'}
+    non_valid_time = {'(null)', 'UNKNOWN'}
+
+    # Creates a data frame consisting of only rows with information from the valid lists for all columns of interest
+    cleaned_set = df[
+        df['boro_nm'].isin(valid_boro) &
+        df['law_cat_cd'].isin(valid_code) &
+        ~df['cmplnt_to_tm'].isin(non_valid_time)
+    ][['boro_nm', 'law_cat_cd', 'cmplnt_to_tm', 'hour']].copy()
+    
+    return cleaned_set
+
+fully_clean_df = create_cleaned_single_set(df)
+print(f"   Records after filtering: {len(fully_clean_df):,}")
+
+# Step 3: Group by borough and hour to count crimes
+print("\n3. Aggregating crimes by borough and hour...")
+
+crime_counts = fully_clean_df.groupby(['boro_nm', 'hour']).size().reset_index(name='crime_count')
+
+print(f"   Total borough-hour combinations: {len(crime_counts):,}")
+print(f"\nCrime count statistics:")
+print(crime_counts['crime_count'].describe())
+
+print(f"\nAverage crimes per hour by borough:")
+boro_avg = crime_counts.groupby('boro_nm')['crime_count'].mean().sort_values(ascending=False)
+print(boro_avg.round(2))
+
+print(f"\nCrime counts by hour of day (all boroughs):")
+hour_avg = crime_counts.groupby('hour')['crime_count'].mean().sort_values(ascending=False)
+print(hour_avg.round(2))
+
+# Step 4: Create features from hour and borough
+print("\n4. Creating features...")
+
+# One-hot encode borough
+borough_dummies = pd.get_dummies(crime_counts['boro_nm'], prefix='boro')
+crime_counts = pd.concat([crime_counts, borough_dummies], axis=1)
+
+# Create hour-based features
+# Cyclical encoding (captures that 23:00 is close to 00:00)
+crime_counts['hour_sin'] = np.sin(2 * np.pi * crime_counts['hour'] / 24)
+crime_counts['hour_cos'] = np.cos(2 * np.pi * crime_counts['hour'] / 24)
+
+# Time of day indicators
+crime_counts['is_rush_hour'] = crime_counts['hour'].apply(
+    lambda x: 1 if (7 <= x <= 9) or (16 <= x <= 18) else 0
+)
+crime_counts['is_night'] = crime_counts['hour'].apply(
+    lambda x: 1 if (22 <= x or x <= 5) else 0
+)
+crime_counts['is_business_hours'] = crime_counts['hour'].apply(
+    lambda x: 1 if (9 <= x <= 17) else 0
+)
+crime_counts['is_late_night'] = crime_counts['hour'].apply(
+    lambda x: 1 if (0 <= x <= 3) else 0
+)
+crime_counts['is_evening'] = crime_counts['hour'].apply(
+    lambda x: 1 if (18 <= x <= 22) else 0
+)
+
+print(f"   Total features: {crime_counts.shape[1]}")
+
+# Step 5: Prepare features and target
+print("\n5. Preparing training data...")
+
+# Features: hour, hour_sin, hour_cos, borough dummies, time indicators
+exclude_cols = ['crime_count', 'boro_nm']
+feature_cols = [col for col in crime_counts.columns if col not in exclude_cols]
+
+X = crime_counts[feature_cols]
+y = crime_counts['crime_count']
+
+print(f"   Feature matrix shape: {X.shape}")
+print(f"   Features: {feature_cols}")
+
+# Step 6: Train-test split (80/20)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+print(f"\n   Training set: {len(X_train)} samples")
+print(f"   Test set: {len(X_test)} samples")
+
+# Step 7: Train regression models
+print("\n" + "="*70)
+print("TRAINING REGRESSION MODELS")
+print("="*70)
+
+models = {
+    'Linear Regression': LinearRegression(),
+    'Random Forest': RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1),
+    'Gradient Boosting': GradientBoostingRegressor(n_estimators=100, max_depth=5, learning_rate=0.1, random_state=42)
+}
+
+results = {}
+
+for name, model in models.items():
+    print(f"\n--- {name} ---")
+    
+    # Train
+    model.fit(X_train, y_train)
+    
+    # Predict
+    y_pred_train = model.predict(X_train)
+    y_pred_test = model.predict(X_test)
+    
+    # Evaluate
+    train_r2 = r2_score(y_train, y_pred_train)
+    test_r2 = r2_score(y_test, y_pred_test)
+    train_rmse = np.sqrt(mean_squared_error(y_train, y_pred_train))
+    test_rmse = np.sqrt(mean_squared_error(y_test, y_pred_test))
+    test_mae = mean_absolute_error(y_test, y_pred_test)
+    
+    results[name] = {
+        'model': model,
+        'train_r2': train_r2,
+        'test_r2': test_r2,
+        'train_rmse': train_rmse,
+        'test_rmse': test_rmse,
+        'test_mae': test_mae,
+        'predictions': y_pred_test
+    }
+    
+    print(f"Train R²: {train_r2:.4f}")
+    print(f"Test R²: {test_r2:.4f}")
+    print(f"Test RMSE: {test_rmse:.2f} crimes")
+    print(f"Test MAE: {test_mae:.2f} crimes")
+
+# Step 8: Model comparison
+print("\n" + "="*70)
+print("MODEL ACCURACY COMPARISON")
+print("="*70)
+print("\n📊 HOW TO READ THESE METRICS:\n")
+print("R² Score (0.0 to 1.0):")
+print("  → 1.0 = Perfect predictions")
+print("  → 0.7+ = Excellent")
+print("  → 0.5-0.7 = Good")
+print("  → Below 0.5 = Needs improvement")
+print("\nRMSE (Root Mean Squared Error):")
+print("  → Average prediction error in number of crimes")
+print("  → LOWER is better")
+print("\nMAE (Mean Absolute Error):")
+print("  → Typical error per prediction")
+print("  → LOWER is better\n")
+
+comparison_df = pd.DataFrame({
+    'Model': list(results.keys()),
+    'Test R²': [results[m]['test_r2'] for m in results],
+    'Test RMSE': [results[m]['test_rmse'] for m in results],
+    'Test MAE': [results[m]['test_mae'] for m in results]
+}).sort_values('Test R²', ascending=False)
+
+print(comparison_df.to_string(index=False))
+
+# Best model
+best_model_name = comparison_df.iloc[0]['Model']
+best_model = results[best_model_name]['model']
+
+print(f"\n🏆 BEST MODEL: {best_model_name}")
+print(f"   Test R² Score: {results[best_model_name]['test_r2']:.4f}")
+print(f"   Test RMSE: {results[best_model_name]['test_rmse']:.2f} crimes")
+print(f"   Test MAE: {results[best_model_name]['test_mae']:.2f} crimes")
+
+# Step 9: Feature importance
+print("\n" + "="*70)
+print("FEATURE IMPORTANCE / COEFFICIENTS")
+print("="*70)
+
+if hasattr(best_model, 'feature_importances_'):
+    importance_df = pd.DataFrame({
+        'feature': feature_cols,
+        'importance': best_model.feature_importances_
+    }).sort_values('importance', ascending=False)
+    
+    print("\nTop 10 most important features:")
+    print(importance_df.head(10).to_string(index=False))
+    
+elif hasattr(best_model, 'coef_'):
+    coef_df = pd.DataFrame({
+        'feature': feature_cols,
+        'coefficient': best_model.coef_
+    }).sort_values('coefficient', key=abs, ascending=False)
+    
+    print("\nTop 10 most important coefficients:")
+    print(coef_df.head(10).to_string(index=False))
+
+# Step 10: Predictions by borough
+print("\n" + "="*70)
+print("PREDICTIONS BY BOROUGH")
+print("="*70)
+
+test_data_with_pred = X_test.copy()
+test_data_with_pred['actual'] = y_test.values
+test_data_with_pred['predicted'] = results[best_model_name]['predictions']
+test_data_with_pred['error'] = abs(test_data_with_pred['actual'] - test_data_with_pred['predicted'])
+
+valid_boro = ['STATEN ISLAND', 'BROOKLYN', 'QUEENS', 'MANHATTAN', 'BRONX']
+
+print("\nAverage predictions vs actual by borough:")
+for boro in valid_boro:
+    boro_col = f'boro_{boro}'
+    if boro_col in test_data_with_pred.columns:
+        mask = test_data_with_pred[boro_col] == 1
+        if mask.any():
+            actual_mean = test_data_with_pred.loc[mask, 'actual'].mean()
+            pred_mean = test_data_with_pred.loc[mask, 'predicted'].mean()
+            error_mean = test_data_with_pred.loc[mask, 'error'].mean()
+            print(f"{boro:15s}: Actual={actual_mean:6.2f}  Predicted={pred_mean:6.2f}  Error={error_mean:.2f}")
+
+# Step 11: Simplified interpretation
+print("\n" + "="*70)
+print("🎯 BOTTOM LINE - MODEL ACCURACY")
+print("="*70)
+
+avg_crime_count = y.mean()
+
+print(f"""
+Your best model: {best_model_name}
+
+✓ R² Score: {results[best_model_name]['test_r2']:.4f}
+  Explains {results[best_model_name]['test_r2']*100:.1f}% of the variation in crime counts
+  
+✓ Average Error: {results[best_model_name]['test_mae']:.2f} crimes per prediction
+  When predicting crimes per hour, we're typically off by ±{results[best_model_name]['test_mae']:.2f} crimes
+  
+✓ Relative Error: {(results[best_model_name]['test_mae'] / avg_crime_count * 100):.1f}%
+  Compared to the average of {avg_crime_count:.2f} crimes/hour
+""")
+
+if results[best_model_name]['test_r2'] > 0.7:
+    print("🏆 EXCELLENT accuracy! Your model is highly reliable.")
+elif results[best_model_name]['test_r2'] > 0.5:
+    print("✅ GOOD accuracy! Your model makes solid predictions.")
+elif results[best_model_name]['test_r2'] > 0.3:
+    print("⚠️  MODERATE accuracy. Model is somewhat predictive.")
+else:
+    print("⚠️  LOW accuracy. Predictions have high uncertainty.")
+
+print(f"\nWhat this means in practice:")
+print(f"  If there are actually {avg_crime_count:.0f} crimes in an hour,")
+print(f"  your model will typically predict between {avg_crime_count - results[best_model_name]['test_mae']:.0f} and {avg_crime_count + results[best_model_name]['test_mae']:.0f} crimes.")
+
+# Step 12: Average crimes by hour for each borough
+print("\n" + "="*70)
+print("📋 AVERAGE CRIMES PER HOUR BY BOROUGH")
+print("="*70)
+
+# Create a line chart with hours as rows and boroughs as columns
+hourly_by_borough = fully_clean_df.groupby(['boro_nm', 'hour']).size().reset_index(name='crime_count')
+hourly_by_borough = hourly_by_borough.groupby(['boro_nm', 'hour'])['crime_count'].mean().reset_index()
+pivot_table = hourly_by_borough.pivot(index='hour', columns='boro_nm', values='crime_count').fillna(0)
+
+
+
+
+
+# Step 13: Create visualizations for the tables
+print("\n" + "="*70)
+print("📊 CREATING VISUALIZATIONS")
+print("="*70)
+
+# Set style for better looking plots
+plt.style.use('seaborn-v0_8-darkgrid')
+fig = plt.figure(figsize=(16, 12))
+
+
+
+
+# Step 13: Create individual model visualizations
+print("\n" + "="*70)
+print("📊 CREATING INDIVIDUAL MODEL VISUALIZATIONS")
+print("="*70)
+
+# Set style for better looking plots
+plt.style.use('seaborn-v0_8-darkgrid')
+
+# 1. LINEAR REGRESSION VISUALIZATION
+print("\nCreating Linear Regression visualization...")
+fig_lr, axes_lr = plt.subplots(2, 2, figsize=(14, 10))
+fig_lr.suptitle('Linear Regression Model Analysis', fontsize=16, fontweight='bold', y=1.02)
+
+# Flatten axes
+axes_lr = axes_lr.flatten()
+
+# Get Linear Regression results
+lr_model = results['Linear Regression']['model']
+lr_predictions = results['Linear Regression']['predictions']
+
+# Subplot 1: Actual vs Predicted scatter plot
+ax1 = axes_lr[0]
+ax1.scatter(y_test, lr_predictions, alpha=0.6, color='#4ECDC4', edgecolors='black', linewidth=0.5)
+# Perfect prediction line
+max_val = max(y_test.max(), lr_predictions.max())
+min_val = min(y_test.min(), lr_predictions.min())
+ax1.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect Prediction')
+ax1.set_xlabel('Actual Crime Count', fontsize=12, fontweight='bold')
+ax1.set_ylabel('Predicted Crime Count', fontsize=12, fontweight='bold')
+ax1.set_title('Actual vs Predicted (Linear Regression)', fontsize=14, fontweight='bold')
+ax1.grid(True, alpha=0.3)
+ax1.legend()
+ax1.set_facecolor('#f8f9fa')
+
+# Add R² annotation
+r2_text = f"R² = {results['Linear Regression']['test_r2']:.4f}"
+rmse_text = f"RMSE = {results['Linear Regression']['test_rmse']:.2f}"
+ax1.text(0.05, 0.95, f'{r2_text}\n{rmse_text}', 
+         transform=ax1.transAxes, fontsize=12, 
+         verticalalignment='top',
+         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+# Subplot 2: Residual plot
+ax2 = axes_lr[1]
+residuals = y_test - lr_predictions
+ax2.scatter(lr_predictions, residuals, alpha=0.6, color='#FF6B6B', edgecolors='black', linewidth=0.5)
+ax2.axhline(y=0, color='black', linestyle='--', linewidth=2)
+ax2.set_xlabel('Predicted Crime Count', fontsize=12, fontweight='bold')
+ax2.set_ylabel('Residuals (Actual - Predicted)', fontsize=12, fontweight='bold')
+ax2.set_title('Residual Plot', fontsize=14, fontweight='bold')
+ax2.grid(True, alpha=0.3)
+ax2.set_facecolor('#f8f9fa')
+
+# Add residual statistics
+residual_mean = residuals.mean()
+residual_std = residuals.std()
+ax2.text(0.05, 0.95, f'Mean Residual: {residual_mean:.2f}\nStd Residual: {residual_std:.2f}', 
+         transform=ax2.transAxes, fontsize=11,
+         verticalalignment='top',
+         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+# Subplot 3: Error distribution
+ax3 = axes_lr[2]
+ax3.hist(residuals, bins=30, color='#45B7D1', edgecolor='black', alpha=0.7)
+ax3.axvline(x=0, color='red', linestyle='--', linewidth=2, label='Zero Error')
+ax3.set_xlabel('Prediction Error', fontsize=12, fontweight='bold')
+ax3.set_ylabel('Frequency', fontsize=12, fontweight='bold')
+ax3.set_title('Error Distribution', fontsize=14, fontweight='bold')
+ax3.grid(True, alpha=0.3)
+ax3.legend()
+ax3.set_facecolor('#f8f9fa')
+
+# Subplot 4: Top coefficients (if available)
+ax4 = axes_lr[3]
+if hasattr(lr_model, 'coef_'):
+    # Get coefficients
+    coef_df = pd.DataFrame({
+        'feature': feature_cols,
+        'coefficient': lr_model.coef_
+    }).sort_values('coefficient', key=abs, ascending=False).head(10)
+    
+    colors = ['#4ECDC4' if x > 0 else '#FF6B6B' for x in coef_df['coefficient']]
+    bars = ax4.barh(range(len(coef_df)), coef_df['coefficient'].values, color=colors, edgecolor='black')
+    ax4.set_yticks(range(len(coef_df)))
+    ax4.set_yticklabels(coef_df['feature'])
+    ax4.set_xlabel('Coefficient Value', fontsize=12, fontweight='bold')
+    ax4.set_title('Top 10 Feature Coefficients', fontsize=14, fontweight='bold')
+    ax4.grid(True, alpha=0.3, axis='x')
+    ax4.set_facecolor('#f8f9fa')
+    
+    # Add value labels
+    for i, bar in enumerate(bars):
+        width = bar.get_width()
+        ax4.text(width + (abs(width)*0.05), bar.get_y() + bar.get_height()/2,
+                f'{width:.3f}', va='center', fontsize=9, fontweight='bold')
+else:
+    ax4.text(0.5, 0.5, 'No coefficients available\nfor this model type', 
+             ha='center', va='center', transform=ax4.transAxes, fontsize=12)
+    ax4.set_title('Feature Coefficients', fontsize=14, fontweight='bold')
+    ax4.axis('off')
+
+plt.tight_layout()
+plt.savefig('linear_regression_analysis.png', dpi=300, bbox_inches='tight', facecolor='white')
+print("✓ Linear Regression visualization saved as 'linear_regression_analysis.png'")
+
+# 2. RANDOM FOREST VISUALIZATION
+print("\nCreating Random Forest visualization...")
+fig_rf, axes_rf = plt.subplots(2, 2, figsize=(14, 10))
+fig_rf.suptitle('Random Forest Model Analysis', fontsize=16, fontweight='bold', y=1.02)
+
+# Flatten axes
+axes_rf = axes_rf.flatten()
+
+# Get Random Forest results
+rf_model = results['Random Forest']['model']
+rf_predictions = results['Random Forest']['predictions']
+
+# Subplot 1: Actual vs Predicted scatter plot
+ax1 = axes_rf[0]
+ax1.scatter(y_test, rf_predictions, alpha=0.6, color='#96CEB4', edgecolors='black', linewidth=0.5)
+# Perfect prediction line
+max_val = max(y_test.max(), rf_predictions.max())
+min_val = min(y_test.min(), rf_predictions.min())
+ax1.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect Prediction')
+ax1.set_xlabel('Actual Crime Count', fontsize=12, fontweight='bold')
+ax1.set_ylabel('Predicted Crime Count', fontsize=12, fontweight='bold')
+ax1.set_title('Actual vs Predicted (Random Forest)', fontsize=14, fontweight='bold')
+ax1.grid(True, alpha=0.3)
+ax1.legend()
+ax1.set_facecolor('#f8f9fa')
+
+# Add R² annotation
+r2_text = f"R² = {results['Random Forest']['test_r2']:.4f}"
+rmse_text = f"RMSE = {results['Random Forest']['test_rmse']:.2f}"
+ax1.text(0.05, 0.95, f'{r2_text}\n{rmse_text}', 
+         transform=ax1.transAxes, fontsize=12, 
+         verticalalignment='top',
+         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+# Subplot 2: Feature Importance
+ax2 = axes_rf[1]
+if hasattr(rf_model, 'feature_importances_'):
+    # Get feature importances
+    importance_df = pd.DataFrame({
+        'feature': feature_cols,
+        'importance': rf_model.feature_importances_
+    }).sort_values('importance', ascending=False).head(15)
+    
+    bars = ax2.barh(range(len(importance_df)), importance_df['importance'].values, 
+                    color='#FFEAA7', edgecolor='black')
+    ax2.set_yticks(range(len(importance_df)))
+    ax2.set_yticklabels(importance_df['feature'])
+    ax2.set_xlabel('Importance Score', fontsize=12, fontweight='bold')
+    ax2.set_title('Top 15 Feature Importances', fontsize=14, fontweight='bold')
+    ax2.grid(True, alpha=0.3, axis='x')
+    ax2.set_facecolor('#f8f9fa')
+    
+    # Add value labels
+    for i, bar in enumerate(bars):
+        width = bar.get_width()
+        ax2.text(width + (max(importance_df['importance'])*0.01), bar.get_y() + bar.get_height()/2,
+                f'{width:.3f}', va='center', fontsize=9, fontweight='bold')
+else:
+    ax2.text(0.5, 0.5, 'No feature importances available', 
+             ha='center', va='center', transform=ax2.transAxes, fontsize=12)
+    ax2.set_title('Feature Importances', fontsize=14, fontweight='bold')
+    ax2.axis('off')
+
+# Subplot 3: Prediction Error by Hour
+ax3 = axes_rf[2]
+# Extract hour from test data if available
+if 'hour' in X_test.columns:
+    test_hours = X_test['hour']
+    rf_errors = abs(y_test - rf_predictions)
+    error_by_hour = pd.DataFrame({'hour': test_hours, 'error': rf_errors}).groupby('hour').mean()
+    
+    ax3.bar(error_by_hour.index, error_by_hour['error'], color='#FF6B6B', alpha=0.7, edgecolor='black')
+    ax3.set_xlabel('Hour of Day', fontsize=12, fontweight='bold')
+    ax3.set_ylabel('Average Absolute Error', fontsize=12, fontweight='bold')
+    ax3.set_title('Prediction Error by Hour', fontsize=14, fontweight='bold')
+    ax3.set_xticks(range(0, 24, 2))
+    ax3.grid(True, alpha=0.3)
+    ax3.set_facecolor('#f8f9fa')
+    
+    # Highlight worst hour
+    worst_hour = error_by_hour['error'].idxmax()
+    worst_error = error_by_hour['error'].max()
+    ax3.bar(worst_hour, worst_error, color='#FF0000', alpha=0.8, edgecolor='black')
+    ax3.text(worst_hour, worst_error*1.05, f'Worst\n{worst_hour}:00', 
+             ha='center', va='bottom', fontsize=10, fontweight='bold',
+             bbox=dict(boxstyle='round', facecolor='yellow', alpha=0.7))
+else:
+    # Alternative: Error distribution
+    rf_residuals = y_test - rf_predictions
+    ax3.hist(rf_residuals, bins=30, color='#45B7D1', edgecolor='black', alpha=0.7)
+    ax3.axvline(x=0, color='red', linestyle='--', linewidth=2, label='Zero Error')
+    ax3.set_xlabel('Prediction Error', fontsize=12, fontweight='bold')
+    ax3.set_ylabel('Frequency', fontsize=12, fontweight='bold')
+    ax3.set_title('Error Distribution', fontsize=14, fontweight='bold')
+    ax3.grid(True, alpha=0.3)
+    ax3.legend()
+    ax3.set_facecolor('#f8f9fa')
+
+# Subplot 4: Model Performance Metrics Comparison
+ax4 = axes_rf[3]
+metrics = ['R² Score', 'RMSE', 'MAE']
+rf_values = [
+    results['Random Forest']['test_r2'],
+    results['Random Forest']['test_rmse'],
+    results['Random Forest']['test_mae']
+]
+
+bars = ax4.bar(metrics, rf_values, color=['#96CEB4', '#FF6B6B', '#45B7D1'], 
+               edgecolor='black', alpha=0.8)
+ax4.set_ylabel('Score / Error', fontsize=12, fontweight='bold')
+ax4.set_title('Random Forest Performance Metrics', fontsize=14, fontweight='bold')
+ax4.grid(True, alpha=0.3, axis='y')
+ax4.set_facecolor('#f8f9fa')
+
+# Add value labels
+for bar in bars:
+    height = bar.get_height()
+    ax4.text(bar.get_x() + bar.get_width()/2., height + (height*0.05),
+            f'{height:.3f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
+
+plt.tight_layout()
+plt.savefig('random_forest_analysis.png', dpi=300, bbox_inches='tight', facecolor='white')
+print("✓ Random Forest visualization saved as 'random_forest_analysis.png'")
+
+# 3. GRADIENT BOOSTING VISUALIZATION
+print("\nCreating Gradient Boosting visualization...")
+fig_gb, axes_gb = plt.subplots(2, 2, figsize=(14, 10))
+fig_gb.suptitle('Gradient Boosting Model Analysis', fontsize=16, fontweight='bold', y=1.02)
+
+# Flatten axes
+axes_gb = axes_gb.flatten()
+
+# Get Gradient Boosting results
+gb_model = results['Gradient Boosting']['model']
+gb_predictions = results['Gradient Boosting']['predictions']
+
+# Subplot 1: Actual vs Predicted scatter plot
+ax1 = axes_gb[0]
+ax1.scatter(y_test, gb_predictions, alpha=0.6, color='#C44D58', edgecolors='black', linewidth=0.5)
+# Perfect prediction line
+max_val = max(y_test.max(), gb_predictions.max())
+min_val = min(y_test.min(), gb_predictions.min())
+ax1.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect Prediction')
+ax1.set_xlabel('Actual Crime Count', fontsize=12, fontweight='bold')
+ax1.set_ylabel('Predicted Crime Count', fontsize=12, fontweight='bold')
+ax1.set_title('Actual vs Predicted (Gradient Boosting)', fontsize=14, fontweight='bold')
+ax1.grid(True, alpha=0.3)
+ax1.legend()
+ax1.set_facecolor('#f8f9fa')
+
+# Add R² annotation
+r2_text = f"R² = {results['Gradient Boosting']['test_r2']:.4f}"
+rmse_text = f"RMSE = {results['Gradient Boosting']['test_rmse']:.2f}"
+mae_text = f"MAE = {results['Gradient Boosting']['test_mae']:.2f}"
+ax1.text(0.05, 0.95, f'{r2_text}\n{rmse_text}\n{mae_text}', 
+         transform=ax1.transAxes, fontsize=11, 
+         verticalalignment='top',
+         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+# Subplot 2: Feature Importance
+ax2 = axes_gb[1]
+if hasattr(gb_model, 'feature_importances_'):
+    # Get feature importances
+    importance_df = pd.DataFrame({
+        'feature': feature_cols,
+        'importance': gb_model.feature_importances_
+    }).sort_values('importance', ascending=False).head(15)
+    
+    bars = ax2.barh(range(len(importance_df)), importance_df['importance'].values, 
+                    color='#FF6B6B', edgecolor='black')
+    ax2.set_yticks(range(len(importance_df)))
+    ax2.set_yticklabels(importance_df['feature'])
+    ax2.set_xlabel('Importance Score', fontsize=12, fontweight='bold')
+    ax2.set_title('Top 15 Feature Importances', fontsize=14, fontweight='bold')
+    ax2.grid(True, alpha=0.3, axis='x')
+    ax2.set_facecolor('#f8f9fa')
+    
+    # Add value labels
+    for i, bar in enumerate(bars):
+        width = bar.get_width()
+        ax2.text(width + (max(importance_df['importance'])*0.01), bar.get_y() + bar.get_height()/2,
+                f'{width:.3f}', va='center', fontsize=9, fontweight='bold')
+else:
+    ax2.text(0.5, 0.5, 'No feature importances available', 
+             ha='center', va='center', transform=ax2.transAxes, fontsize=12)
+    ax2.set_title('Feature Importances', fontsize=14, fontweight='bold')
+    ax2.axis('off')
+
+# Subplot 3: Learning Curve (if available)
+ax3 = axes_gb[2]
+if hasattr(gb_model, 'train_score_'):
+    train_scores = gb_model.train_score_
+    ax3.plot(range(1, len(train_scores)+1), train_scores, 
+             marker='o', linewidth=2, color='#4ECDC4', label='Training Score')
+    ax3.set_xlabel('Number of Boosting Stages', fontsize=12, fontweight='bold')
+    ax3.set_ylabel('Score', fontsize=12, fontweight='bold')
+    ax3.set_title('Gradient Boosting Learning Curve', fontsize=14, fontweight='bold')
+    ax3.grid(True, alpha=0.3)
+    ax3.legend()
+    ax3.set_facecolor('#f8f9fa')
+    
+    # Mark optimal iteration if early stopping was used
+    if hasattr(gb_model, 'n_estimators_'):
+        ax3.axvline(x=gb_model.n_estimators_, color='red', linestyle='--', 
+                   linewidth=2, alpha=0.7, label=f'Optimal: {gb_model.n_estimators_} trees')
+        ax3.legend()
+else:
+    # Alternative: Error distribution by magnitude
+    gb_residuals = y_test - gb_predictions
+    ax3.scatter(gb_predictions, gb_residuals, alpha=0.6, color='#45B7D1', edgecolors='black', linewidth=0.5)
+    ax3.axhline(y=0, color='black', linestyle='--', linewidth=2)
+    ax3.set_xlabel('Predicted Crime Count', fontsize=12, fontweight='bold')
+    ax3.set_ylabel('Residuals (Actual - Predicted)', fontsize=12, fontweight='bold')
+    ax3.set_title('Residual Analysis', fontsize=14, fontweight='bold')
+    ax3.grid(True, alpha=0.3)
+    ax3.set_facecolor('#f8f9fa')
+
+# Subplot 4: Model Comparison within Gradient Boosting context
+ax4 = axes_gb[3]
+# Compare GB performance to other models
+models_compare = list(results.keys())
+r2_comparison = [results[m]['test_r2'] for m in models_compare]
+
+colors = ['#C44D58' if m == 'Gradient Boosting' else '#95a5a6' for m in models_compare]
+bars = ax4.bar(models_compare, r2_comparison, color=colors, edgecolor='black', alpha=0.8)
+ax4.set_ylabel('R² Score', fontsize=12, fontweight='bold')
+ax4.set_title('Model Performance Comparison (R²)', fontsize=14, fontweight='bold')
+ax4.grid(True, alpha=0.3, axis='y')
+ax4.set_facecolor('#f8f9fa')
+ax4.set_ylim([min(r2_comparison) - 0.05, max(r2_comparison) + 0.05])
+
+# Add value labels
+for bar in bars:
+    height = bar.get_height()
+    ax4.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+            f'{height:.4f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
+
+plt.tight_layout()
+plt.savefig('gradient_boosting_analysis.png', dpi=300, bbox_inches='tight', facecolor='white')
+print("✓ Gradient Boosting visualization saved as 'gradient_boosting_analysis.png'")
+
+# 4. MODEL COMPARISON OVERVIEW
+print("\nCreating model comparison overview...")
+fig_comp, axes_comp = plt.subplots(1, 3, figsize=(18, 6))
+fig_comp.suptitle('Model Performance Comparison Overview', fontsize=16, fontweight='bold', y=1.05)
+
+# Metrics to compare
+metrics = ['Test R²', 'Test RMSE', 'Test MAE']
+model_names = list(results.keys())
+
+# Color scheme for each model
+model_colors = {
+    'Linear Regression': '#4ECDC4',
+    'Random Forest': '#96CEB4',
+    'Gradient Boosting': '#C44D58'
+}
+
+# Plot 1: R² Scores
+ax1 = axes_comp[0]
+r2_scores = [results[m]['test_r2'] for m in model_names]
+bars1 = ax1.bar(model_names, r2_scores, 
+                color=[model_colors[m] for m in model_names],
+                edgecolor='black')
+ax1.set_ylabel('R² Score', fontsize=12, fontweight='bold')
+ax1.set_title('R² Score Comparison', fontsize=14, fontweight='bold')
+ax1.grid(True, alpha=0.3, axis='y')
+ax1.set_ylim([min(r2_scores) - 0.1, max(r2_scores) + 0.05])
+ax1.set_facecolor('#f8f9fa')
+
+# Add value labels
+for bar in bars1:
+    height = bar.get_height()
+    ax1.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+            f'{height:.4f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
+
+# Plot 2: RMSE Comparison
+ax2 = axes_comp[1]
+rmse_scores = [results[m]['test_rmse'] for m in model_names]
+bars2 = ax2.bar(model_names, rmse_scores,
+                color=[model_colors[m] for m in model_names],
+                edgecolor='black')
+ax2.set_ylabel('RMSE (crimes)', fontsize=12, fontweight='bold')
+ax2.set_title('RMSE Comparison', fontsize=14, fontweight='bold')
+ax2.grid(True, alpha=0.3, axis='y')
+ax2.set_ylim([0, max(rmse_scores) * 1.1])
+ax2.set_facecolor('#f8f9fa')
+
+# Add value labels
+for bar in bars2:
+    height = bar.get_height()
+    ax2.text(bar.get_x() + bar.get_width()/2., height + (max(rmse_scores)*0.02),
+            f'{height:.2f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
+
+# Plot 3: MAE Comparison
+ax3 = axes_comp[2]
+mae_scores = [results[m]['test_mae'] for m in model_names]
+bars3 = ax3.bar(model_names, mae_scores,
+                color=[model_colors[m] for m in model_names],
+                edgecolor='black')
+ax3.set_ylabel('MAE (crimes)', fontsize=12, fontweight='bold')
+ax3.set_title('MAE Comparison', fontsize=14, fontweight='bold')
+ax3.grid(True, alpha=0.3, axis='y')
+ax3.set_ylim([0, max(mae_scores) * 1.1])
+ax3.set_facecolor('#f8f9fa')
+
+# Add value labels
+for bar in bars3:
+    height = bar.get_height()
+    ax3.text(bar.get_x() + bar.get_width()/2., height + (max(mae_scores)*0.02),
+            f'{height:.2f}', ha='center', va='bottom', fontsize=11, fontweight='bold')
+
+plt.tight_layout()
+plt.savefig('model_comparison_overview.png', dpi=300, bbox_inches='tight', facecolor='white')
+print("✓ Model comparison overview saved as 'model_comparison_overview.png'")
+
+# Show all plots
+plt.show()
+
+print("\n" + "="*70)
+print("✅ ALL MODEL VISUALIZATIONS COMPLETE!")
+print("="*70)
+print("\nGenerated visualization files:")
+print("1. linear_regression_analysis.png - Linear Regression detailed analysis")
+print("2. random_forest_analysis.png - Random Forest detailed analysis")
+print("3. gradient_boosting_analysis.png - Gradient Boosting detailed analysis")
+print("4. model_comparison_overview.png - Side-by-side model comparison")
+print("\nEach visualization includes:")
+print("  • Actual vs Predicted scatter plots")
+print("  • Feature importance/coefficient analysis")
+print("  • Error/residual analysis")
+print("  • Performance metrics visualization")
