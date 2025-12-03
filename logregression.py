@@ -2,17 +2,15 @@
 CRIME TYPE PREDICTION - LOGISTIC REGRESSION WITH PIE CHART
 ===========================================================
 Predicts the likelihood/percentage of each crime type.
-"commit2"
 
-INPUTS:  Gender, Race, Age, Location
+INPUTS:  Gender, Race, Location (CATEGORICAL ONLY)
 OUTPUT:  Probability for each crime type + PIE CHART
 """
 
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.preprocessing import OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
@@ -26,12 +24,18 @@ sns.set_style('whitegrid')
 # 1. LOAD DATA
 # ====================
 
-# >>> PUT YOUR CSV FILENAME HERE <
-df = pd.read_csv('5uac-w243_version_2502.csv')
+# >>> PUT YOUR TRAIN CSV FILENAME HERE <
+train_df = pd.read_csv('YOUR_TRAIN_FILE.csv')
+
+# >>> PUT YOUR TEST CSV FILENAME HERE <
+test_df = pd.read_csv('YOUR_TEST_FILE.csv')
+
+print(f"Training samples: {len(train_df)}")
+print(f"Test samples: {len(test_df)}")
 
 
 # ====================
-# 2. DEFINE FEATURES
+# 2. DEFINE FEATURES (CATEGORICAL ONLY)
 # ====================
 
 # >>> PUT YOUR CATEGORICAL COLUMN NAMES HERE <
@@ -41,29 +45,21 @@ categorical_features = [
     'location',    # REPLACE ME
 ]
 
-# >>> PUT YOUR NUMERICAL COLUMN NAMES HERE <
-numerical_features = [
-    'age',         # REPLACE ME
-]
-
 # >>> PUT YOUR CRIME TYPE COLUMN NAME HERE <
 target_column = 'crime_type'  # REPLACE ME - must be TEXT (Theft, Assault, etc.)
 
+print(f"\nCrime types in dataset: {sorted(train_df[target_column].unique())}")
+
 
 # ====================
-# 3. PREPARE DATA
+# 3. PREPARE DATA (Already split!)
 # ====================
 
-X = df[categorical_features + numerical_features]
-y = df[target_column]
+X_train = train_df[categorical_features]
+y_train = train_df[target_column]
 
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42, stratify=y  # 80/20 train-test split
-)
-
-print(f"Training samples: {len(X_train)}")
-print(f"Test samples: {len(X_test)}")
-print(f"\nCrime types in dataset: {sorted(y.unique())}")
+X_test = test_df[categorical_features]
+y_test = test_df[target_column]
 
 
 # ====================
@@ -72,8 +68,7 @@ print(f"\nCrime types in dataset: {sorted(y.unique())}")
 
 preprocessor = ColumnTransformer([
     ('cat', OneHotEncoder(drop='first', sparse_output=False, handle_unknown='ignore'), 
-     categorical_features),
-    ('num', StandardScaler(), numerical_features)
+     categorical_features)
 ])
 
 pipeline = Pipeline([
@@ -119,7 +114,7 @@ print(classification_report(y_test, y_test_pred))
 
 print("\n📊 Creating confusion matrix chart...")
 cm = confusion_matrix(y_test, y_test_pred)
-crime_types = sorted(y.unique())
+crime_types = sorted(train_df[target_column].unique())
 
 plt.figure(figsize=(10, 8))
 sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
@@ -127,7 +122,7 @@ sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
             cbar_kws={'label': 'Number of Predictions'})
 plt.xlabel('Predicted Crime Type', fontsize=12, fontweight='bold')
 plt.ylabel('Actual Crime Type', fontsize=12, fontweight='bold')
-plt.title('Confusion Matrix - Model Prediction Accuracy', 
+plt.title('Confusion Matrix - Logistic Regression Model', 
           fontsize=14, fontweight='bold', pad=20)
 plt.tight_layout()
 plt.savefig('confusion_matrix.png', dpi=300, bbox_inches='tight')
@@ -144,7 +139,6 @@ new_person = pd.DataFrame({
     'gender': ['Female'],      # REPLACE ME
     'race': ['White'],         # REPLACE ME
     'location': ['Downtown'],  # REPLACE ME
-    'age': [30],               # REPLACE ME
 })
 
 # Get crime type prediction
@@ -160,7 +154,6 @@ print("="*60)
 print(f"\nProfile:")
 print(f"  Gender:   {new_person['gender'].values[0]}")
 print(f"  Race:     {new_person['race'].values[0]}")
-print(f"  Age:      {new_person['age'].values[0]}")
 print(f"  Location: {new_person['location'].values[0]}")
 
 print(f"\n🎯 Most Likely Crime Type: {predicted_crime[0]}")
@@ -208,7 +201,7 @@ for autotext in autotexts:
     autotext.set_weight('bold')
 
 # Title with person's profile
-profile_text = f"{new_person['gender'].values[0]}, {new_person['race'].values[0]}, Age {new_person['age'].values[0]}, {new_person['location'].values[0]}"
+profile_text = f"{new_person['gender'].values[0]}, {new_person['race'].values[0]}, {new_person['location'].values[0]}"
 plt.title(f'Crime Type Probability Distribution\n{profile_text}', 
           fontsize=14, fontweight='bold', pad=20)
 
@@ -227,7 +220,6 @@ scenarios = pd.DataFrame({
     'gender': ['Female', 'Male', 'Female', 'Male'],
     'race': ['White', 'Black', 'Hispanic', 'Asian'],
     'location': ['Downtown', 'Suburb', 'Downtown', 'Park'],
-    'age': [25, 35, 45, 28],
 })
 
 # Predict crime types
@@ -247,7 +239,7 @@ print(scenarios)
 # 11. PIE CHARTS FOR MULTIPLE SCENARIOS (2x2 GRID)
 # ====================
 
-print("\n Creating pie charts for multiple scenarios...")
+print("\n📊 Creating pie charts for multiple scenarios...")
 
 fig, axes = plt.subplots(2, 2, figsize=(16, 12))
 axes = axes.flatten()
@@ -279,7 +271,7 @@ for idx in range(min(4, len(scenarios))):
         autotext.set_weight('bold')
     
     # Title for each subplot
-    profile = f"{scenarios.iloc[idx]['gender']}, {scenarios.iloc[idx]['race']}, Age {scenarios.iloc[idx]['age']}, {scenarios.iloc[idx]['location']}"
+    profile = f"{scenarios.iloc[idx]['gender']}, {scenarios.iloc[idx]['race']}, {scenarios.iloc[idx]['location']}"
     axes[idx].set_title(f'Scenario {idx+1}: {profile}', fontsize=11, fontweight='bold', pad=10)
 
 plt.suptitle('Crime Type Probability Distribution - Multiple Scenarios', 
@@ -301,7 +293,6 @@ print("="*60)
 for idx in range(len(scenarios)):
     print(f"\nScenario {idx+1}: {scenarios.iloc[idx]['gender']}, "
           f"{scenarios.iloc[idx]['race']}, "
-          f"Age {scenarios.iloc[idx]['age']}, "
           f"{scenarios.iloc[idx]['location']}")
     
     probas = scenario_probas[idx]
@@ -321,8 +312,8 @@ for idx in range(len(scenarios)):
 print("\n" + "="*60)
 print("ACTUAL CRIME DISTRIBUTION IN YOUR DATA")
 print("="*60)
-crime_counts = df[target_column].value_counts()
-crime_percentages = (crime_counts / len(df)) * 100
+crime_counts = train_df[target_column].value_counts()
+crime_percentages = (crime_counts / len(train_df)) * 100
 
 for crime, count in crime_counts.items():
     percentage = crime_percentages[crime]
@@ -332,7 +323,7 @@ for crime, count in crime_counts.items():
 print("\n" + "="*60)
 print("✓ ANALYSIS COMPLETE")
 print("="*60)
-print("\n Charts created:")
+print("\n📊 Charts created:")
 print("  1. confusion_matrix.png")
 print("  2. crime_probability_pie_chart.png (single person)")
 print("  3. multiple_scenarios_pie_charts.png (2x2 grid)")
